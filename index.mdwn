@@ -1,6 +1,6 @@
 [[!pagestats pages="./tags/*" among="./posts/*"]]
 
-<a href="http://dave.recoil.org/>"Dave Scott</a>'s blog
+[Dave Scott](http://dave.recoil.org/)'s blog
 
 Have a look at the most recent posts below, or browse the tag cloud on the
 right. Archives of all [[posts]] and all [[comments]] are also available.
