@@ -3,7 +3,7 @@
 [Dave Scott](http://dave.recoil.org/)'s blog
 
 Have a look at the most recent posts below, or browse the tag cloud on the
-right. Archives of all [[posts]] and all [[comments]] are also available.
+right. Archives of all [[posts]] are also available.
 
 [[!inline pages="./posts/* and !*/Discussion" show="10"
 actions=yes rootpage="posts"]]
