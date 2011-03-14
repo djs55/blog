@@ -94,4 +94,18 @@ an error in the X log:
 and a non-working pointer. The workaround I described above tells the X server
 to ignore the relative axes and to really expect absolute co-ordinates.
 
+Conclusion
+----------
+
+ * The PVFB code is present and works at least as well as "vncterm" for 
+   text-based stuff.
+ * The X configuration needs to be slightly tweaked -- it doesn't just work
+   out of the box. This is still better than "vncterm" where X will never
+   work (unless you like ascii-art)
+ * We should consider switching to PVFB by default, on a guest-per-guest
+   basis (after checking the kernels have new enough frontends)
+ * We should develop a plan to fix the niggles with X, particularly the
+   relative vs absolute mouse. If necessary perhaps we need to supply the
+   guest with two pointers: one relative-only and one absolute-only?
+
 [[!tag tags/XCP]]
