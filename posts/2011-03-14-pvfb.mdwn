@@ -1,0 +1,97 @@
+Xen Cloud Platform and PVFB
+===========================
+
+While talking to Stefano and Jon Ludlam last week the question came up,
+"why doesn't XCP use PVFB?"
+
+[PVFB](http://lwn.net/Articles/270771/) is a pair of paravirtual 
+frontend/backend drivers for framebuffer, keyboard and mouse which together
+allow fully PV guests to have a modern graphical console. Currently PV
+guests on XCP only expose a plain text console via a program called "vncterm".
+
+It turns out that most of the code you need for PVFB is already there: it's 
+just a matter of turning it on. I did a bit of hacking in 
+[my pvfb branch on github](https://github.com/djs55/xen-api/tree/pvfb)
+and now you can request the use of PVFB by setting a VM.platform flag as 
+follows:
+
+    xe vm-param-set uuid=.... platform:pvfb=true
+
+When I started my Debian squeeze guest, I was greeted with a nice PVFB text
+console. 
+
+<table>
+<tr>
+<td><img src="vncterm.png"></td>
+<td><img src="pvfb.png"></td>
+</tr>
+<tr>
+<td>Before: vncterm</td>
+<td>After: PVFB</td>
+</tr>
+</table>
+
+OK, so perhaps that's not the most exciting change in the world. However in
+the PVFB case I can now start X and gnome, which is when the fun really starts.
+
+Debian Squeeze and PVFB
+-----------------------
+
+There are two problems with out-of-the-box X on squeeze with a PVFB:
+
+ 1. the keyboard doesn't work
+ 2. the mouse doesn't work either
+
+Thankfully both can be fixed. To fix the keyboard we need to set a "XkbLayout"
+to some sensible value, otherwise pressing keys does result in KeyPress and
+KeyRelease events (as seen in "xev") but these have no associated X keysym.
+
+	cat <<EOF >/usr/share/X11/xorg.conf.d/16-xen-virtual-keyboard.conf
+	Section "InputClass"
+			Identifier "xen"
+			MatchProduct "Xen Virtual Keyboard"
+			Driver "evdev"
+			Option "XkbLayout" "us"
+	EndSection
+	EOF
+
+To fix the mouse we have to explicitly tell X to expect only absolute positions
+from the xen virtual pointer, ignoring the fact that -- in theory -- it may
+send relative updates too:
+
+    cat <<EOF >/usr/share/X11/xorg.conf.d/15-xen-virtual-pointer.conf
+    Section "InputClass"
+            Identifier "xen"
+            MatchProduct "Xen Virtual Pointer"
+            Driver "evdev"
+            Option "IgnoreRelativeAxes" "True"
+    EndSection
+	EOF
+
+With both of these tweaks we have a working graphical console!
+
+![Debian squeeze + XCP + PVFB](gnome-terminal-small.png)
+
+The absolute vs relative co-ordinates mismatch
+----------------------------------------------
+
+There's a fascinating analysis on
+[bug #523914 on RedHat's bugzilla](https://bugzilla.redhat.com/show_bug.cgi?id=523914) and then on [xen-devel](http://xen.1045712.n5.nabble.com/RFC-drop-frontend-support-for-relative-pointer-td2539330.html). It turns out that, almost
+everyone in the universe with a PVFB is using absolute co-ordinates (with the
+notable exception of XCI) since the protocol "prefers" absolute over relative,
+and the implemention that supports absolute was written before the code was
+merged into the official xen tree. However, because of the theoretical 
+possibility that some system only supports relative, the frontend advertises
+itself to "evdev" as being capable of both absolute and relative. 
+Unfortunately for mice (not touchpads or touchscreens), "evdev" "prefers" 
+relative over absolute so we end up in a situation where the backend sends
+absolute events and evdev is expecting to receive relative ones. The result is 
+an error in the X log:
+
+    (II) Xen Virtual Pointer: initialized for relative axes.
+    (WW) Xen Virtual Pointer: ignoring absolute axes.
+
+and a non-working pointer. The workaround I described above tells the X server
+to ignore the relative axes and to really expect absolute co-ordinates.
+
+[[!tag tags/XCP tags/PVFB]]
