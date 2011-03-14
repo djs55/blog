@@ -1,0 +1,3 @@
+This feed contains pages in the "XCP" category.
+
+[[!inline pages="link(tags/XCP) and !*/Discussion" show=10 actions=yes]]

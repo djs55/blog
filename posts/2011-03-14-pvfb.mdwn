@@ -22,8 +22,8 @@ console.
 
 <table>
 <tr>
-<td><img src="vncterm.png"></td>
-<td><img src="pvfb.png"></td>
+<td><img src="images/vncterm.png"></td>
+<td><img src="images/pvfb.png"></td>
 </tr>
 <tr>
 <td>Before: vncterm</td>
@@ -70,7 +70,7 @@ send relative updates too:
 
 With both of these tweaks we have a working graphical console!
 
-![Debian squeeze + XCP + PVFB](gnome-terminal-small.png)
+![Debian squeeze + XCP + PVFB](images/gnome-terminal-small.png)
 
 The absolute vs relative co-ordinates mismatch
 ----------------------------------------------
@@ -94,4 +94,4 @@ an error in the X log:
 and a non-working pointer. The workaround I described above tells the X server
 to ignore the relative axes and to really expect absolute co-ordinates.
 
-[[!tag tags/XCP tags/PVFB]]
+[[!tag tags/XCP]]
