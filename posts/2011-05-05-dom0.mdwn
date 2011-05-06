@@ -62,6 +62,6 @@ could be considered as a small "embedded" system, like a home NAT box or router.
 
 So, will domain 0 ever become 64-bit? It eventually will. For the present it will remain a paravirtualised 32-bit linux VM. In the future it could be a fully virtualised (HVM) 64-bit linux PVops VM. Perhaps one day it might even be windows. 
 
-*In summary: whether domain 0 is 32-bit or 64-bit won't matter because important services such as device drivers will be hosted in separate VMs with customised configurations.*
+*In summary: by "disaggregating" domain 0 and placing important services such as device drivers in separate VMs, we make the system more reliable, more flexible and more scalable. In the end it won't even matter if domain 0 is 32-bit or 64-bit*
 
 [[!tag tags/XCP tags/XenServer]]
