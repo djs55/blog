@@ -1,0 +1,67 @@
+XenServer / XCP domain 0: 32 or 64-bit?
+=======================================
+
+The domain 0 in XenServer and XCP is currently a 32-bit CentOS VM.
+An interesting question which I often hear is
+
+    when will domain 0 become 64-bit?
+
+I think this question is great because it represents a fantastic opportunity 
+to discuss the architecture of the system and how it's expected to evolve
+over the next few years. If you'd like to know more, then read on!
+
+Some background
+---------------
+
+[XenServer](http://www.citrix.com/English/ps2/products/product.asp?contentID=683148) and [XCP](http://www.xen.org/products/cloudxen.html) are both 64-bit systems.
+[Xen](http://www.xen.org/) (the hypervisor) is compiled to run in 64-bit
+mode and therefore it requires 64-bit physical hardware to run on. Note however it is 
+fully capable of running both 32-bit and 64-bit VMs on top. 
+Xen does not contain device drivers; instead it allows physical hardware to be "passed through"
+to running VMs (known as "domains"). In the current version of XenServer and XCP the initial domain
+(domain 0) contains all the physical hardware drivers for the whole system and provides
+disk and network access for other VMs.
+
+So, why do people ask about domain 0 being 32-bit? It usually boils down to two entirely reasonable concerns:
+
+ 1.  Some particular hardware driver only runs in a 64-bit Linux kernel and hence can't run in domain 0.
+ 2.  Every VM incurs some amount of overhead in domain 0 for hardware emulation, network and disk. As a 32-bit VM, domain 0 can only address a few GiB of RAM which could therefore become a scalability bottleneck.
+
+The plan
+--------
+
+The plan is to *split-up domain 0 into separate VMs* (a technique known as [disaggregation](http://www.cl.cam.ac.uk/~dgm36/.../2008-murray2008improving.pdf) ).
+
+Hardware device drivers will be placed in separate VMs, and granted access to individual PCI devices. This means that
+
+ 1.  device drivers are isolated from each other and from domain 0; if a driver is buggy and crashes then the VM can simply be rebooted without affecting the overall system;
+ 2.  device driver VMs can be based on any OS: whichever is most suitable e.g. FreeBSD, Linux or Windows; and
+ 3.  updates to device driver VMs can be handled separately from the rest of the system: there is no need to have a "big-bang" upgrade with domain 0, or to re-certify the hardware driver when the domain 0 kernel version changes.
+
+Per-VM overhead such as legacy hardware emulation will be placed into "stub domains". This means that
+
+ 1.  memory and CPU consumption scale past any domain 0 limits; and
+ 2.  work done on behalf of a VM is easily accountable to that VM: this is important to give a true picture of where system load is coming from and would allow (eg) accurate billing in a cloud.
+
+Once these VMs have been created and domain 0 has been slimmed down, it then becomes worthwhile
+to turn on [trusted boot](http://xen.org/files/xensummit_fall07/23_JosephCihula.pdf).
+
+Note: these new VMs generally won't be the size of regular OS installs; they can be
+based on cut-down images (see the [Linux Based Stubdoms project](http://www.google-melange.com/gsoc/project/google/gsoc2011/jiageng08/5001)) or on [Mini-OS](http://www.cs.uic.edu/~spopuri/minios.html). If necessary for smaller systems it is also possible to further cut down on memory by having one VM perform multiple roles, although this loses some of the isolation benefits (e.g. one driver crash may affect multiple drivers, although not the host itself).
+
+Disaggregation can also be performed incrementally; once the necessary [XenAPI](http://www.xen.org/files/XenCloud/ocamldoc/apidoc.html) interfaces are in place then we can begin.
+
+What about domain 0 itself?
+---------------------------
+
+Once we've disaggregated domain 0, what will be left? The answer is: very little! We'll still
+have the logic for booting the host, for starting 
+and stopping VMs, and for deciding which 
+VM should control which piece of hardware... but that's about it. At this point domain 0 
+could be considered as a small "embedded" system, like a home NAT box or router. 
+
+So, will domain 0 ever become 64-bit? It eventually will. For the present it will remain a paravirtualised 32-bit linux VM. In the future it could be a fully virtualised (HVM) 64-bit linux PVops VM. Perhaps one day it might even be windows. 
+
+*In summary: whether domain 0 is 32-bit or 64-bit won't matter because important services such as device drivers will be hosted in separate VMs with customised configurations.*
+
+[[!tag tags/XCP tags/XenServer]]
