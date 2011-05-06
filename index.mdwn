@@ -1,6 +1,6 @@
 [[!pagestats pages="./tags/*" among="./posts/*"]]
 
-[Dave Scott](http://dave.recoil.org/)'s blog
+[Dave Scott](http://dave.recoil.org/)'s blog: I'm currently working for [Citrix](http://www.citrix.com/), as [XenServer](http://www.citrix.com/English/ps2/products/product.asp?contentID=683148) System Architect.
 
 Have a look at the most recent posts below, or browse the tag cloud on the
 right. Archives of all [[posts]] are also available.
