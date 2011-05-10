@@ -1,0 +1,212 @@
+xapi<->storage interface on XCP
+===============================
+
+The interface between xapi and storage "plugins" enables xapi to add disks to VM without having to know anything about
+the backend storage itself. The interface includes two concepts:
+
+  1. Virtual Disk Images (VDIs) -- these are disks which can be connected to VMs
+  2. Storage Repositories (SRs) -- these are collections of VDIs on a particular storage 'substrate' (server / target / location / whatever)
+
+NB: don't confuse my use of "Virtual Disk Image" (VDI) with "Virtual Desktop Infrastructure" (VDI). That's an unfortunate acronym clash.
+
+I've recently been cleaning up the xapi <-> storage interface on
+[my private fork on github](https://github.com/djs55/xen-api/tree/CA-46505)
+so now seems like a good time to document some of the principles behind it and some of the details of how it works.
+
+design principles
+-----------------
+
+The original storage interface was based on the single design principle:
+
+  1. xapi (the storage interface client) must remain ignorant of the details of individual storage types. Quirks must be hidden behind the interface.
+
+This has been a success; storage implementations (plugins) have been created for a myriad of storage types, from plain .vhd files in a shared filesystem, to vhd-format LVs on shared LVM, to [VastSky](sourceforge.net/projects/vastsky/).
+
+However there's always room for improvement. In particular the following problems have surfaced repeatedly:
+
+  1. The interface contains a lot of undocumented constraints imposed on the *client* for correct operation. Performing apparently independent operations in parallel can lead to unexpected failures.
+  2. The interface assumes that the storage implementation resides in the same domain as the toolstack, since it identifies devices by *filesystem paths*. This conflicts with our desire to [disaggregate domain 0](posts/2011-05-05-dom0/).
+  3. Like all software, the implementations have bugs and occasionally fail. xapi doesn't cope well with storage failures leading to errors like
+[Failure("The VDI is already attached in RW mode; it can't be attached in RO mode")](http://forums.citrix.com/message.jspa?messageID=1452146)
+  4. xapi currently uses a system of reference counts to determine when it should free (VDI, SR) resources through the interface. This code is complex and error-prone. Worse, when it goes wrong and something has leaked, you can't find out exactly what and why.
+  5. xapi's client implementation is complicated and yet cannot be tested without running a full system. Unfortunately running a full system is both slow (hiding bugs) and resource intensive (limiting how often you can run it).
+
+Not all of this can be fixed in one go. The highest priority at the moment is to fix bugs and hence I'll focus on (3), (4) and (5) but while hopefully advancing the causes of (1) and (2).
+
+To the original storage interface design principle I will add:
+
+  1. **assume other components can fail**: xapi will still log and report the error but it will not get into a "stuck state", requiring a restart.
+  2. **replace reference-counts with full references**: xapi will remember "who" is referencing this resource and allow this to be queried. This will help trace the root causes of failures.
+  3. **use a garbage collector**: transient failures to free a resource will not cause a permanent leak, because the GC will catch them later.
+  4. **create focused, automated tests for critical code**: the storage interface *itself* will have a suite of tests which don't require a full system to run.
+  5. **specify the interface concretely**: don't leave important data implicit
+
+design overview
+---------------
+
+The following diagram gives an overview of the main system components:
+
+<img src="/blog/images/2011-05-10-storage-components.png">
+
+where we have:
+
+  * *xapi*: a.k.a. the toolstack, has a pool-level view; knows where VMs are running and which VDIs are being used
+  * *xapi storage sub-component*: (*new*) has a host-level view; knows which SRs and VDIs are attached and what states they are in
+  * *storage plugins*: has an SR-level view; provides implementations for operations like "attach", "detach"
+  * *xapi storage interface*: (*new*) simple interface which xapi uses to access storage
+  * *SMAPI*: interface exposed by the existing storage plugins.
+
+the new xapi storage sub-component
+-----------------------------------
+
+The new xapi storage sub-component (currently built into the main xapi) provides a high-level API (labelled "xapi storage interface" in the diagram above) where xapi can
+
+  * declare that a particular VBD requires a particular VDI
+  * declare that a particular VBD has now finished with its VDI
+  * for VM.migrate, where VM downtime is important, have a little more fine-grained control over when and where the disk is available
+
+It does not require xapi to track where VDIs are "attached" or to track what state they may be in. When xapi needs a VDI for a VBD, it simply requests it. When xapi has finished with that VBD it calls a single idempotent function which means "please cleanup anything associated with this VBD".
+
+In line with the principle of **specifying the interface concretely**, this new API is defined using [ocaml](http://caml.inria.fr/) for the concrete syntax
+and I used the [rpc-light](https://github.com/samoht/rpc-light) camlp4 syntax extension to generate
+implementation boilerplate for marshal/unmarshal/stubs/skeletons.
+The API definitions are contained within the file
+[ocaml/xapi/storage_interface.ml](https://github.com/djs55/xen-api/blob/CA-46505/ocaml/xapi/storage_interface.ml) and include types for SR, VDI, task, device etc. values and functions which operate on these values.
+
+An important concept which I added is that of a *datapath*: a "user" of an attached VDI. To the new component, datapaths contain opaque strings to which the client (i.e. xapi) has associated some meaning. Internally xapi only ever creates a datapath when it is trying to connect a VM to a VDI, via a xen Virtual Block Device (VBD). For convenience xapi encodes the VM's domain id and device id in this string, which has two advantages:
+
+  1. it's easy for xapi's existing xen VBD cleanup code to also cleanup datapaths: no new data has to be remembered anywhere; and
+  2. since the domain id is encoded in the string, the scheme naturally works across localhost migration: this wouldn't be the case if the data was (eg) the VBD XenAPI reference.
+
+So in-keeping with the design principle of **replacing reference-counts with full references**, instead of incrementing a per-VDI reference count, xapi explicitly associates each VBD with the VDI via a datapath. Whenever xapi has finished with the VBD, it can "destroy" the associated datapath and rely on the new component to perform whatever cleanup is necessary.
+
+The file [vdi_automaton.ml](https://github.com/djs55/xen-api/blob/CA-46505/ocaml/xapi/vdi_automaton.ml) contains a definition of a *per-VDI* *per-datapath* state machine, described in the following diagram:
+
+<img src="/blog/images/2011-05-10-storage-vdi-states.png">
+
+All VDIs begin and eventually finish in the "detached" state. Note the anomaly that it is currently not possible to move from the "RO" states into the "RW" states without going through the detached state -- more on the consequences of this later.
+
+I defined the notion of the "superstate" of multiple VDI states as follows:
+		
+    let superstate states = 
+    	let activated = List.fold_left (fun acc s -> 
+    		acc || (s = Activated RO) || (s = Activated RW)) false states in
+    	let rw = List.fold_left (fun acc s ->
+    		acc || (s = Activated RW) || (s = Attached RW)) false states in
+    	if states = []
+    	then Detached
+    	else 
+    		if activated
+    		then Activated (if rw then RW else RO)
+    		else Attached (if rw then RW else RO)
+
+When an operation is performed on the per-VDI, per-datapath state machine, the overall effect on the VDI "superstate" is computed, checked to ensure it can be decomposed into a sensible set of legal transitions (sensible means: does not walk through the "detached" state which will fail if the VDI is in use) and then executed. Note because it is not possible to move a VDI from the "RO" states into the "RW" states but the "superstate" of a set of "RO" and "RW" states is an "RW" state, it is possible for some datapaths to be "RO" while some are "RW" *provided the operations are performed "RW" first": this sensitivity to ordering of effects is the main reason why we should probably make it possible officially to move from the "RO" states into the "RW" states in the storage plugins.
+
+Thinking in terms of the effect on the superstate of a VDI is convenient because it seamlessly handles operations like "datapath destroy" where the superstate of a VDI may drop from being "activated(RW)" down to being "detached". The list of decomposed transitions (deactivate; detach) are easily computed and executed.
+
+concurrency
+-----------
+
+In order to keep the interface as simple as possible, the new component permits callers (i.e. xapi) to invoke operations in parallel and in any order. Internally the locking policy is:
+
+  * VDI.attach, VDI.detach, VDI.activate, VDI.deactivate operations will be serialised per-VDI; and
+  * SR.detach will wait for all in-flight operations on contained VDIs to cease and will block new ones
+
+state persistence
+-----------------
+
+After each operation the new system state is serialised to disk in
+
+    /var/run/storage.db
+
+and so it will be deleted on reboot, useful since the per-VDI and per-SR host state is also cleared on reboot.
+
+In general the order of side-effects is:
+
+  1. the side-effect on the storage is performed;
+  2. the new storage state is persisted to disk; and finally
+  3. xapi updates its state and persists this to disk.
+
+Crashes between any of these steps may result in the side-effect on the storage being repeated (because it was forgotten that it was already done). This implies that the underlying storage operations need to be *idempotent*.
+
+on backend failures
+-------------------
+
+In line with the design principles that we should **assume that other components will fail** and that we should **use a garbage collector**, there is the notion of a datapath being "leaked" i.e. when an attempt to free a resource on the underlying storage fails and the datapath state (and VDI superstate) cannot be updated. 
+
+Firstly, leaked datapaths are tracked and the component will make attempts to free them properly in future.
+
+Secondly, xapi doesn't need to know anything about this: it can log the error and walk away from the problem. Subsequent attempts to use the resource will first retry to free it: this is necessary to change the disk mode from RO to RW (unfortunately) but it's probably a good idea to fully clean up a device which may have been partially cleaned up before attempting to reset it. Note, again, the backend operations must be *idempotent*.
+
+Thirdly, when an SR is being detached the new component will make a best-effort attempt to clean up any VDI state. Even if that fails it will call the storage plugin's sr_detach function and, assuming that succeeds, it will conclude that all VDIs are now detached and forget about all associated datapaths.
+
+Fourthly, if attempts to detach a VDI are failing (e.g. due to a coding error) and it is not possible to detach the whole SR to clean up, there are some new CLI commands to help:
+
+    # xe host-get-sm-diagnostics uuid=<uuid>
+    The following SRs are attached:
+        SR OpaqueRef:30934391-ccd7-4faa-35cd-5390ad865745
+        SR OpaqueRef:42832a6d-825f-0b43-a738-78b8d7755040
+            VDI OpaqueRef:ef5cb7a2-7720-5e37-b018-65eaebd28b0b
+                activated RO (device=Some /dev/sm/backend/ea6d61c0-d141-7135-7e1d-1c549acf2b6d/c39a9144-0728-4fa3-af48-b51a74d7cbb2)
+                    DP: vbd/1/51744: activated RO
+                    DP: vbd/1/51776: activated RO
+            VDI OpaqueRef:00b56c6a-6e63-c87c-8104-b0f37ae2796a
+                activated RW (device=Some /dev/sm/backend/ea6d61c0-d141-7135-7e1d-1c549acf2b6d/9ce8282f-1e61-4d27-a0a4-4cf1675f90aa)
+                    DP: vbd/1/51728: activated RW
+            VDI OpaqueRef:7ee176ce-a056-ccbc-381b-4763fb373d17
+                activated RW (device=Some /dev/sm/backend/ea6d61c0-d141-7135-7e1d-1c549acf2b6d/ffc8178e-80b7-4019-ac42-142b7057d45b)
+                    DP: vbd/1/51712: activated RW
+        SR OpaqueRef:d9fb30dc-50e2-b002-0589-296978d548eb
+        SR OpaqueRef:f3c81d08-46b8-c359-8be3-64ad91514875
+    
+    No errors have been logged.
+
+The following command will attempt to clean up a named datapath explicitly (NB the names are on display in the previous diagnostics command e.g. "vbd/1/51712"):
+
+    # xe host-sm-dp-destroy uuid=<uuid> dp=<dp>
+
+If the datapath cannot be destroyed because the storage plugin repeatedly fails to clean up then as a last resort, all records of the leaked datapath can simply be forgotten:
+
+    # xe host-sm-dp-forget uuid=<uuid> dp=<dp>
+
+
+the new test suite
+------------------
+
+The new test suite is intended to excercise the per-VDI, per-datapath state machine directly by invoking operations
+which should succeed or fail using a set of higher-order functions named "expect_*". It tests the per-VDI "superstate"
+handling by running lots of per-datapath, per-VDI operations in parallel background threads and using a mock
+storage backend implementation to check for (eg) unexpected double detaches etc. It also contains a set of specific
+corner-case tests including: checking that transient failures are handled properly; checking that detaching an
+SR cleans up properly and checking that removing a datapath cleans up properly.
+
+the code
+--------
+
+The code exists in the following files:
+
+  * [ocaml/xapi/storage_interface.ml](https://github.com/djs55/xen-api/blob/CA-46505/ocaml/xapi/storage_interface.ml): defines the types and RPC functions in the new storage interface
+  * [ocaml/xapi/vdi_automaton.ml](https://github.com/djs55/xen-api/blob/CA-46505/ocaml/xapi/vdi_automaton.ml): defines the per-VDI, per-datapath state machine
+  * [ocaml/xapi/storage_impl.ml](https://github.com/djs55/xen-api/blob/CA-46505/ocaml/xapi/storage_impl.ml): a functor which implements the new storage interface, over a raw backend interface
+  * [ocaml/xapi/storage_access.ml](https://github.com/djs55/xen-api/blob/CA-46505/ocaml/xapi/storage_access.ml): instantiates the storage_impl, over the current storage backend interfaces
+  * [ocaml/xapi/storage_impl_test.ml](https://github.com/djs55/xen-api/blob/CA-46505/ocaml/xapi/storage_impl_test.ml): contains the standalone test suite
+  * [ocaml/xapi/storage_locks.ml](https://github.com/djs55/xen-api/blob/CA-46505/ocaml/xapi/storage_locks.ml): two-level locking primitives suitable (where a root lock is exclusive w.r.t. all leaf locks)
+
+the next steps
+--------------
+
+  1. expand the storage_interface to include the full set of SMAPI operations (e.g. including vdi_clone)
+  2. modify the result of the VDI.attach call to return the domain id and the xenstore physical-device key (or whatever is needed by blkback) to cover the driver domain case
+  3. add a mechanism to register backend implementations, which covers driver domains
+
+
+summary
+-------
+
+The new xapi storage sub-component:
+
+  1. has a simple interface **specified concretely** in an IDL;
+  2. is built to **assume other components can fail**l;
+  3. employs full **references** to resources (rather than simply reference counts);
+  4. uses a **garbage collector** to ensure that resources are eventually cleaned up;
+  5. has **focused, automated tests for critical code**
