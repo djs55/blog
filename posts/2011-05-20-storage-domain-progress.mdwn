@@ -1,0 +1,77 @@
+Progress on creating storage driver domains for XCP
+---------------------------------------------------
+
+Currently all storage drivers in 
+[XCP](http://www.xen.org/products/cloudxen.html) 
+must be in domain 0. I'd like to
+make it possible to put storage drivers into other domains (ie VM appliances)
+so that
+
+  * they are independent of the domain 0 OS (linux distro, linux kernel etc);
+  * if they crash then they can be rebooted independently; and
+  * domain 0 can be made smaller, into something more like a little embedded system.
+
+For more information, see the [discussion about the future of domain 0](posts/2011-05-05-dom0/).
+
+Conceptually this isn't very difficult. We just need to
+
+  1. remote the storage control plane (VDI.attach et al)
+  2. configure blkback endpoints in domains other than 0
+  3. make sure that qemu can still read the disks (it currently knows a little too much about the devices being in domain 0)
+  4. create an example storage domain to prove it works
+
+Here's my current task list:
+
+<table border=1>
+	<th><td>Description</td><td>Depends</td><td>Status</td></th>
+    <tr>
+		<td>1</td>
+		<td>create a method for remoting the SMAPI (storage control plane)</td>
+       	<td></td>
+		<td><a href="https://github.com/xen-org/xen-api/commit/349d28deb93bc4587d896ee236469b5ca46d959a">merged</a></td>
+	</tr>
+	<tr>
+		<td>2</td>
+		<td>allow lots of blkfronts in domain 0 (for qemus)</td>
+		<td></td>
+		<td><a href="https://github.com/xen-org/xen-api/commit/1a8307db366b6c575e333a5c5ff528b9c7e1dbfb">merged</a></td>
+	</tr>
+	<tr>
+		<td>3</td>
+		<td>VDI.attach needs to return the info we need for blkback, not a path in dom0</td>
+		<td>1</td>
+		<td>Not started</td>
+	</tr>
+	<tr>
+		<td>4</td>
+		<td>disks which qemu needs require blkfront instances in dom0</td>
+		<td>2</td>
+		<td>Not started</td>
+	</tr>
+	<tr>
+		<td>5</td>
+		<td>remoted SMAPI needs fleshed-out with SR.create, SR.destroy, VDI.create, VDI.destroy etc</td>
+		<td>1</td>
+		<td>Not started</td>
+	</tr>
+	<tr>
+		<td>6</td>
+		<td>add a simple policy associating a driver domain (VM) with an SR or PBD</td>
+		<td>1</td>
+		<td>Not started</td>
+	</tr>
+	<tr>
+		<td>7</td>
+		<td>create an example storage domain with FreeBSD?</td>
+		<td>1</td>
+		<td>Not started</td>
+	</tr>
+	<tr>
+		<td>8</td>
+		<td>create a domain 0 storage control multiplexor capable of (eg) starting storage domains on-demand</td>
+		<td>6</td>
+		<td>Not started</td>
+	</tr>
+</table>
+
+So far I've focused on pieces which also coincidentally fix existing bugs in XCP: this is why some changes have already been merged into mainline. The rest of the tasks are clearly only useful for the driver domain case so I'll keep these in a personal branch on github.
