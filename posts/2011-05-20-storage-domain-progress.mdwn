@@ -11,7 +11,7 @@ so that
   * if they crash then they can be rebooted independently; and
   * domain 0 can be made smaller, into something more like a little embedded system.
 
-For more information, see the [discussion about the future of domain 0](posts/2011-05-05-dom0/).
+For more information, see the [discussion about the future of domain 0](../../posts/2011-05-05-dom0/).
 
 Conceptually this isn't very difficult. We just need to
 
