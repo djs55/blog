@@ -63,6 +63,10 @@ let list_posts () = match !input_dir with
 	compare [ b.y; b.m; b.d ] [ a.y; a.m; a.d ]
       ) all
 
+let with_file filename f =
+  let oc = open_out filename in
+  finally (fun () -> f oc) (fun () -> close_out oc)
+
 let print_file_to oc =
   let output_line oc txt = output_string oc txt; output_string oc "\n" in
   Unixext.file_lines_iter (output_line oc)
@@ -140,12 +144,14 @@ let _ =
   let posts = list_posts () in
   List.iter
     (fun post ->
-      let oc = open_out (Printf.sprintf "%s/%s.html" !output_dir post.filename) in
-      finally
-	(fun () ->
-	  generate oc posts post
-	) (fun () -> close_out oc)
-    ) posts
+     with_file (Printf.sprintf "%s/%s.html" !output_dir post.filename)
+       (fun oc -> generate oc posts post)
+    ) posts;
+  match posts with
+    | latest :: _ ->
+      with_file (Printf.sprintf "%s/index.html" !output_dir)
+	(fun oc -> print_file_to oc (Printf.sprintf "%s/%s.html" !output_dir latest.filename))
+    | _ -> () (* No posts *)
 
 
 

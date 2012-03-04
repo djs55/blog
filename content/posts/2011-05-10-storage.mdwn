@@ -46,7 +46,7 @@ design overview
 
 The following diagram gives an overview of the main system components:
 
-<img src="/blog/images/2011-05-10-storage-components.png">
+<img src="images/2011-05-10-storage-components.png">
 
 where we have:
 
@@ -87,7 +87,7 @@ The current storage plugins expose operations which change the "states" of VDIs 
 Based on this,
 the file [vdi_automaton.ml](https://github.com/djs55/xen-api/blob/CA-46505/ocaml/xapi/vdi_automaton.ml) contains a definition of a *per-VDI* *per-datapath* state machine, described in the following diagram:
 
-<img src="/blog/images/2011-05-10-storage-vdi-states.png">
+<img src="images/2011-05-10-storage-vdi-states.png">
 
 All VDIs begin and eventually finish in the "detached" state. Note the anomaly that it is currently not possible to move from the "RO" states into the "RW" states without going through the detached state -- more on the consequences of this later.
 
